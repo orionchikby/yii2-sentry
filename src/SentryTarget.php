@@ -6,9 +6,15 @@
 
 namespace notamedia\sentry;
 
+use Sentry\Severity;
+use Sentry\State\Scope;
+use Yii;
 use yii\helpers\ArrayHelper;
 use yii\log\Logger;
 use yii\log\Target;
+use function Sentry\captureException;
+use function Sentry\captureMessage;
+use function Sentry\configureScope;
 
 /**
  * SentryTarget records log messages in a Sentry.
@@ -33,17 +39,18 @@ class SentryTarget extends Target
      * @var callable Callback function that can modify extra's array
      */
     public $extraCallback;
+
     /**
-     * @var \Sentry
+     * @var callable Callback function that can modify user info
      */
-    protected $client;
+    public $userCallback;
 
     /**
      * @inheritdoc
      */
     public function collect($messages, $final)
     {
-        \Sentry\init(['dsn' => $this->dsn]);
+        \Sentry\init(array_merge(['dsn' => $this->dsn], $this->clientOptions));
 
         parent::collect($messages, $final);
     }
@@ -66,8 +73,9 @@ class SentryTarget extends Target
 
             $data = [
                 'level' => static::getLevelName($level),
+                'message' => '',
                 'timestamp' => $timestamp,
-                'tags' => ['category' => $category]
+                'tags' => ['category' => $category],
             ];
 
             if ($text instanceof \Throwable || $text instanceof \Exception) {
@@ -75,6 +83,7 @@ class SentryTarget extends Target
                 \Sentry\captureException($text, $data);
                 continue;
             } elseif (is_array($text)) {
+
                 if (isset($text['msg'])) {
                     $data['message'] = $text['msg'];
                     unset($text['msg']);
@@ -82,24 +91,11 @@ class SentryTarget extends Target
 
                 if (isset($text['tags'])) {
                     $data['tags'] = ArrayHelper::merge($data['tags'], $text['tags']);
-                    \Sentry\configureScope(function (\Sentry\State\Scope $scope) use ($data): void {
-                        foreach ($data['tags'] as $key => $value) {
-                            $scope->setTag($key, $value);
-                        }
-                    });
                     unset($text['tags']);
                 }
 
                 $data['extra'] = $text;
-                
-                if (!empty($data['extra'])) {
-                    \Sentry\configureScope(function (\Sentry\State\Scope $scope) use ($data): void {
-                        foreach ($data['extra'] as $key => $value) {
-                            $scope->setExtra((string)$key, $value);
-                        }
-                    });
-                }
-                
+
             } else {
                 $data['message'] = $text;
             }
@@ -109,7 +105,27 @@ class SentryTarget extends Target
             }
 
             $data = $this->runExtraCallback($text, $data);
-            \Sentry\captureMessage($data['message']);
+
+            if (!empty($data['extra'])) {
+                \Sentry\configureScope(function (\Sentry\State\Scope $scope) use ($data): void {
+                    foreach ($data['extra'] as $key => $value) {
+                        $scope->setExtra((string)$key, $value);
+                    }
+                });
+            }
+
+            if (isset($data['tags'])) {
+                \Sentry\configureScope(function (Scope $scope) use ($data): void {
+                    foreach ($data['tags'] as $key => $value) {
+                        $scope->setTag($key, $value);
+                    }
+                });
+            }
+
+
+            $data = $this->runUserCallback($text, $data);
+
+            \Sentry\captureMessage($data['message'], $data['level']);
         }
     }
 
@@ -123,10 +139,26 @@ class SentryTarget extends Target
     public function runExtraCallback($text, $data)
     {
         if (is_callable($this->extraCallback)) {
-            $data['extra'] = call_user_func($this->extraCallback, $text, $data['extra'] ? $data['extra'] : []);
+            $data['extra'] = call_user_func($this->extraCallback, $text, isset($data['extra']) ? $data['extra'] : []);
         }
 
         return $data;
+    }
+
+    /**
+     * Calls the user callback if it exists
+     *
+     * @param $text
+     * @param $userContext
+     * @return array
+     */
+    public function runUserCallback($text, $userContext)
+    {
+        if (is_callable($this->userCallback)) {
+            $userContext = call_user_func($this->userCallback, $text, isset($userContext) ? $userContext : []);
+        }
+
+        return $userContext;
     }
 
     /**
@@ -146,6 +178,6 @@ class SentryTarget extends Target
             Logger::LEVEL_PROFILE_END => 'debug',
         ];
 
-        return isset($levels[$level]) ? $levels[$level] : 'error';
+        return new Severity($levels[$level] ?? 'error');
     }
 }

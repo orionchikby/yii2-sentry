@@ -6,15 +6,10 @@
 
 namespace notamedia\sentry;
 
-use Sentry\Severity;
 use Sentry\State\Scope;
-use Yii;
 use yii\helpers\ArrayHelper;
 use yii\log\Logger;
 use yii\log\Target;
-use function Sentry\captureException;
-use function Sentry\captureMessage;
-use function Sentry\configureScope;
 
 /**
  * SentryTarget records log messages in a Sentry.
@@ -178,6 +173,6 @@ class SentryTarget extends Target
             Logger::LEVEL_PROFILE_END => 'debug',
         ];
 
-        return new Severity($levels[$level] ?? 'error');
+        return isset($levels[$level]) ? $levels[$level] : 'error';
     }
 }

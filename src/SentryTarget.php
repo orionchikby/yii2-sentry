@@ -38,7 +38,7 @@ class SentryTarget extends Target
     /**
      * @var callable Callback function that can modify user info
      */
-    public $userCallback;
+    public $runDataCallback;
 
     /**
      * @inheritdoc
@@ -73,11 +73,7 @@ class SentryTarget extends Target
                 'tags' => ['category' => $category],
             ];
 
-            if ($text instanceof \Throwable || $text instanceof \Exception) {
-                $data = $this->runExtraCallback($text, $data);
-                \Sentry\captureException($text, $data);
-                continue;
-            } elseif (is_array($text)) {
+            if (is_array($text)) {
 
                 if (isset($text['msg'])) {
                     $data['message'] = $text['msg'];
@@ -101,6 +97,8 @@ class SentryTarget extends Target
 
             $data = $this->runExtraCallback($text, $data);
 
+            $data = $this->runDataCallback($text, $data);
+
             if (!empty($data['extra'])) {
                 \Sentry\configureScope(function (\Sentry\State\Scope $scope) use ($data): void {
                     foreach ($data['extra'] as $key => $value) {
@@ -117,10 +115,11 @@ class SentryTarget extends Target
                 });
             }
 
-
-            $data = $this->runUserCallback($text, $data);
-
-            \Sentry\captureMessage($data['message'], $data['level']);
+            if ($text instanceof \Throwable || $text instanceof \Exception) {
+                \Sentry\captureException($text);
+            } else {
+                \Sentry\captureMessage($data['message'], $data['level']);
+            }
         }
     }
 
@@ -144,16 +143,16 @@ class SentryTarget extends Target
      * Calls the user callback if it exists
      *
      * @param $text
-     * @param $userContext
+     * @param $$data
      * @return array
      */
-    public function runUserCallback($text, $userContext)
+    public function runDataCallback($text, $data)
     {
-        if (is_callable($this->userCallback)) {
-            $userContext = call_user_func($this->userCallback, $text, isset($userContext) ? $userContext : []);
+        if (is_callable($this->runDataCallback)) {
+            $data = call_user_func($this->runDataCallback, $text, isset($data) ? $data : []);
         }
 
-        return $userContext;
+        return $data;
     }
 
     /**
@@ -172,6 +171,8 @@ class SentryTarget extends Target
             Logger::LEVEL_PROFILE_BEGIN => 'debug',
             Logger::LEVEL_PROFILE_END => 'debug',
         ];
+
+        return new \Sentry\Severity(isset($levels[$level]) ? $levels[$level] : 'error');
 
         return isset($levels[$level]) ? $levels[$level] : 'error';
     }
